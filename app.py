@@ -65,6 +65,11 @@ def load_world_series(tick: int):
     return ind.fetch_world_series()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def load_trading(tick: int):
+    return ind.fetch_index_trading()
+
+
 # ---------------------------------------------------------------------------
 # 사이드바 — 자동 갱신 설정
 # ---------------------------------------------------------------------------
@@ -185,8 +190,10 @@ def dashboard():
         "거래량 = 백만주, 거래대금 = 조원 ｜ 봉차트는 최근 30거래일 ｜ "
         "증감 %는 전일 대비 (당일은 장중 누적이라 잠정치)"
     )
-    trading = data.get("trading", [])
-    for col, t in zip(st.columns(len(trading)), trading):
+    trading = load_trading(tick)
+    if not trading:
+        st.info("거래량·거래대금 데이터를 불러올 수 없습니다.")
+    for col, t in zip(st.columns(len(trading)) if trading else [], trading):
         with col:
             st.markdown(f"#### {t.name}")
             if t.error:

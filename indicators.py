@@ -520,5 +520,4 @@ def fetch_all() -> dict:
     return {
         "quotes": fetch_quotes(),
         "disparities": fetch_disparities(),
-        "trading": fetch_index_trading(),
     }
