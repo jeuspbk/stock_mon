@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -122,6 +123,18 @@ class Disparity:
     ticker: str
     price: float | None = None
     values: dict[int, float] = field(default_factory=dict)  # 기간 -> 이격도
+    error: str | None = None
+
+
+@dataclass
+class IndexTrading:
+    """지수 거래량·거래대금 현황 + 봉차트용 시계열."""
+    name: str
+    volume: float | None = None        # 최신 거래량 (백만주)
+    volume_pct: float | None = None    # 거래량 전일 대비 %
+    value: float | None = None         # 최신 거래대금 (조원)
+    value_pct: float | None = None     # 거래대금 전일 대비 %
+    df: pd.DataFrame = field(default_factory=pd.DataFrame)  # 컬럼: 거래량/거래대금
     error: str | None = None
 
 
@@ -436,9 +449,76 @@ def fetch_world_series(lookback_days: int = 60) -> dict[str, pd.DataFrame]:
     return out
 
 
+def _fetch_naver_index_trading(code: str, pages: int = 6) -> pd.DataFrame:
+    """네이버 일별시세 테이블에서 지수 거래량·거래대금을 수집.
+
+    구버전 페이지(EUC-KR)의 일별시세 표에는 차트 API에 없는 거래대금이 포함된다.
+    표 한 행: 날짜 · 체결가 · 전일비 · 등락률 · 거래량(천주) · 거래대금(백만원).
+
+    반환: DataFrame(index=날짜 오름차순, 컬럼=['거래량_천주', '거래대금_백만'])
+    """
+    rows: dict[pd.Timestamp, tuple[float, float]] = {}
+    for page in range(1, pages + 1):
+        url = (
+            "https://finance.naver.com/sise/sise_index_day.naver"
+            f"?code={code}&page={page}"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode("euc-kr", "replace")
+        for m in re.finditer(r"(\d{4}\.\d{2}\.\d{2})</td>(.*?)</tr>", html, re.S):
+            date = m.group(1)
+            cells = re.findall(r"<td[^>]*>(.*?)</td>", m.group(2), re.S)
+            nums = [re.sub(r"<[^>]+>|[\s,%+]", "", c) for c in cells]
+            nums = [n for n in nums if re.match(r"^-?\d+\.?\d*$", n)]
+            if len(nums) >= 5:  # 체결가·전일비·등락률·거래량·거래대금
+                rows[pd.Timestamp(date.replace(".", "-"))] = (
+                    float(nums[-2]), float(nums[-1])
+                )
+    df = pd.DataFrame.from_dict(
+        rows, orient="index", columns=["거래량_천주", "거래대금_백만"]
+    )
+    return df.sort_index()
+
+
+def fetch_index_trading(lookback_days: int = 30) -> list[IndexTrading]:
+    """KOSPI/KOSDAQ 거래량·거래대금 현황과 봉차트용 시계열을 수집.
+
+    거래량은 백만주, 거래대금은 조원 단위로 환산한다.
+    """
+    results: list[IndexTrading] = []
+    for name, ticker in DISPARITY_TARGETS:
+        code = NAVER_INDEX_CODE.get(ticker, name)
+        t = IndexTrading(name=name)
+        try:
+            raw = _fetch_naver_index_trading(code)
+        except Exception:
+            raw = pd.DataFrame()
+        if raw.empty:
+            t.error = "데이터 없음"
+            results.append(t)
+            continue
+
+        df = pd.DataFrame(index=raw.index)
+        df["거래량(백만주)"] = raw["거래량_천주"] / 1_000        # 천주 → 백만주
+        df["거래대금(조원)"] = raw["거래대금_백만"] / 1_000_000   # 백만원 → 조원
+        t.df = df.tail(lookback_days)
+
+        vol, vol_prev = _last_two(df["거래량(백만주)"])
+        val, val_prev = _last_two(df["거래대금(조원)"])
+        t.volume, t.value = vol, val
+        if vol is not None and vol_prev:
+            t.volume_pct = (vol - vol_prev) / vol_prev * 100
+        if val is not None and val_prev:
+            t.value_pct = (val - val_prev) / val_prev * 100
+        results.append(t)
+    return results
+
+
 def fetch_all() -> dict:
     """대시보드용 전체 수집."""
     return {
         "quotes": fetch_quotes(),
         "disparities": fetch_disparities(),
+        "trading": fetch_index_trading(),
     }

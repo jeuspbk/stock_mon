@@ -9,6 +9,9 @@ env/
 # Streamlit
 .streamlit/secrets.toml
 
+# 로컬 실행 로그
+*.log
+
 # OS / editor
 .DS_Store
 Thumbs.db

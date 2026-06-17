@@ -75,6 +75,7 @@ interval = st.sidebar.select_slider(
     "갱신 주기(초)", options=[30, 60, 120, 300], value=60, disabled=not auto,
 )
 show_chart = st.sidebar.toggle("이격도 추이 차트", value=True)
+show_trading = st.sidebar.toggle("거래량·거래대금 차트", value=True)
 show_world_chart = st.sidebar.toggle("세계지수 추이 차트", value=True)
 if st.sidebar.button("🔄 지금 새로고침", use_container_width=True):
     st.cache_data.clear()
@@ -177,6 +178,38 @@ def dashboard():
                 df = series_data.get(d.name)
                 if df is not None and not df.empty:
                     st.line_chart(df, height=200)
+
+    # --- 거래량 · 거래대금 ----------------------------------------------
+    st.subheader("KOSPI / KOSDAQ 거래량 · 거래대금")
+    st.caption(
+        "거래량 = 백만주, 거래대금 = 조원 ｜ 봉차트는 최근 30거래일 ｜ "
+        "증감 %는 전일 대비 (당일은 장중 누적이라 잠정치)"
+    )
+    trading = data.get("trading", [])
+    for col, t in zip(st.columns(len(trading)), trading):
+        with col:
+            st.markdown(f"#### {t.name}")
+            if t.error:
+                st.warning(t.error)
+                continue
+            mcols = st.columns(2)
+            mcols[0].metric(
+                "거래량 (백만주)",
+                f"{t.volume:,.0f}",
+                delta=(f"{t.volume_pct:+.2f}%"
+                       if t.volume_pct is not None else None),
+            )
+            mcols[1].metric(
+                "거래대금 (조원)",
+                f"{t.value:,.2f}",
+                delta=(f"{t.value_pct:+.2f}%"
+                       if t.value_pct is not None else None),
+            )
+            if show_trading and not t.df.empty:
+                st.caption("거래량 (백만주)")
+                st.bar_chart(t.df["거래량(백만주)"], height=180, color="#5b8def")
+                st.caption("거래대금 (조원)")
+                st.bar_chart(t.df["거래대금(조원)"], height=180, color="#e0823d")
 
     # --- 세계 주요 지수 --------------------------------------------------
     st.subheader("세계 주요 지수")
