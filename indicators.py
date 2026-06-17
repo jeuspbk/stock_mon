@@ -490,27 +490,30 @@ def fetch_index_trading(lookback_days: int = 30) -> list[IndexTrading]:
     for name, ticker in DISPARITY_TARGETS:
         code = NAVER_INDEX_CODE.get(ticker, name)
         t = IndexTrading(name=name)
+        # 수집·후처리 전체를 보호: 어떤 예외도 "데이터 없음"으로 강등 (앱 크래시 방지)
         try:
             raw = _fetch_naver_index_trading(code)
+            if raw is None or raw.empty:
+                t.error = "데이터 없음"
+                results.append(t)
+                continue
+
+            # 버전 안전한 방식으로 환산 컬럼 구성 (index 재할당 패턴 회피)
+            vol_s = (raw["거래량_천주"].astype(float) / 1_000).rename("거래량(백만주)")
+            val_s = (raw["거래대금_백만"].astype(float) / 1_000_000).rename("거래대금(조원)")
+            df = pd.concat([vol_s, val_s], axis=1).sort_index()
+            t.df = df.tail(lookback_days)
+
+            vol, vol_prev = _last_two(vol_s)
+            val, val_prev = _last_two(val_s)
+            t.volume, t.value = vol, val
+            if vol is not None and vol_prev:
+                t.volume_pct = (vol - vol_prev) / vol_prev * 100
+            if val is not None and val_prev:
+                t.value_pct = (val - val_prev) / val_prev * 100
         except Exception:
-            raw = pd.DataFrame()
-        if raw.empty:
             t.error = "데이터 없음"
-            results.append(t)
-            continue
-
-        df = pd.DataFrame(index=raw.index)
-        df["거래량(백만주)"] = raw["거래량_천주"] / 1_000        # 천주 → 백만주
-        df["거래대금(조원)"] = raw["거래대금_백만"] / 1_000_000   # 백만원 → 조원
-        t.df = df.tail(lookback_days)
-
-        vol, vol_prev = _last_two(df["거래량(백만주)"])
-        val, val_prev = _last_two(df["거래대금(조원)"])
-        t.volume, t.value = vol, val
-        if vol is not None and vol_prev:
-            t.volume_pct = (vol - vol_prev) / vol_prev * 100
-        if val is not None and val_prev:
-            t.value_pct = (val - val_prev) / val_prev * 100
+            t.df = pd.DataFrame()
         results.append(t)
     return results
 
