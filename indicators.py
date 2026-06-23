@@ -138,6 +138,18 @@ class IndexTrading:
     error: str | None = None
 
 
+@dataclass
+class MarketDeposit:
+    """증시 자금 추이 — 고객예탁금·신용융자 잔고 (단위: 조원)."""
+    deposit: float | None = None       # 고객예탁금 (조원)
+    deposit_pct: float | None = None   # 전일 대비 %
+    credit: float | None = None        # 신용융자 잔고 (조원)
+    credit_pct: float | None = None    # 전일 대비 %
+    date: str | None = None            # 기준일 'YYYY.MM.DD'
+    df: pd.DataFrame = field(default_factory=pd.DataFrame)  # 추이용 (조원)
+    error: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # 수집 로직
 # ---------------------------------------------------------------------------
@@ -516,6 +528,62 @@ def fetch_index_trading(lookback_days: int = 30) -> list[IndexTrading]:
             t.df = pd.DataFrame()
         results.append(t)
     return results
+
+
+def _fetch_naver_deposit() -> pd.DataFrame:
+    """네이버 증시자금추이 표에서 고객예탁금·신용융자 잔고 일별값을 수집.
+
+    표 한 행: 날짜 · 고객예탁금 · 전일비 · 신용잔고 · 전일비 · (펀드…) · 단위 억원.
+    전일비 컬럼은 부호 없는 절대값이라 방향 판단에 쓰지 않고, 값 컬럼만 추출한다.
+
+    반환: DataFrame(index=날짜 오름차순, 컬럼=['고객예탁금', '신용잔고'], 단위 억원)
+    """
+    url = "https://finance.naver.com/sise/sise_deposit.naver"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        html = resp.read().decode("euc-kr", "replace")
+    out: dict[pd.Timestamp, tuple[float, float]] = {}
+    for m in re.finditer(
+        r"(\d{2}\.\d{2}\.\d{2})(.*?)(?=\d{2}\.\d{2}\.\d{2}|</table>)", html, re.S
+    ):
+        seg = re.sub(r"<[^>]+>", " ", m.group(2))
+        nums = re.findall(r"[\d,]+", seg)
+        vals = [float(n.replace(",", "")) for n in nums if n.replace(",", "").isdigit()]
+        if len(vals) >= 3:  # 고객예탁금(값)·전일비·신용잔고(값) …
+            dt = pd.Timestamp("20" + m.group(1).replace(".", "-"))
+            out[dt] = (vals[0], vals[2])
+    df = pd.DataFrame.from_dict(
+        out, orient="index", columns=["고객예탁금", "신용잔고"]
+    )
+    return df.sort_index()
+
+
+def fetch_deposit() -> MarketDeposit:
+    """고객예탁금·신용융자 잔고 최신값과 전일 대비 변화를 수집 (단위: 조원)."""
+    d = MarketDeposit()
+    # 수집·후처리 전체를 보호: 어떤 예외도 "데이터 없음"으로 강등 (앱 크래시 방지)
+    try:
+        raw = _fetch_naver_deposit()
+        if raw is None or raw.empty:
+            d.error = "데이터 없음"
+            return d
+        # 억원 → 조원
+        dep = (raw["고객예탁금"].astype(float) / 10_000).rename("고객예탁금(조원)")
+        cre = (raw["신용잔고"].astype(float) / 10_000).rename("신용잔고(조원)")
+        d.df = pd.concat([dep, cre], axis=1).sort_index()
+        d.date = raw.index[-1].strftime("%Y.%m.%d")
+
+        dv, dv_prev = _last_two(dep)
+        cv, cv_prev = _last_two(cre)
+        d.deposit, d.credit = dv, cv
+        if dv is not None and dv_prev:
+            d.deposit_pct = (dv - dv_prev) / dv_prev * 100
+        if cv is not None and cv_prev:
+            d.credit_pct = (cv - cv_prev) / cv_prev * 100
+    except Exception:
+        d.error = "데이터 없음"
+        d.df = pd.DataFrame()
+    return d
 
 
 def fetch_all() -> dict:

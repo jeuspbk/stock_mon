@@ -70,6 +70,11 @@ def load_trading(tick: int):
     return ind.fetch_index_trading()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def load_deposit(tick: int):
+    return ind.fetch_deposit()
+
+
 # ---------------------------------------------------------------------------
 # 사이드바 — 자동 갱신 설정
 # ---------------------------------------------------------------------------
@@ -217,6 +222,31 @@ def dashboard():
                 st.bar_chart(t.df["거래량(백만주)"], height=180, color="#5b8def")
                 st.caption("거래대금 (조원)")
                 st.bar_chart(t.df["거래대금(조원)"], height=180, color="#e0823d")
+
+    # --- 증시 자금 (고객예탁금) -----------------------------------------
+    st.subheader("증시 자금 (고객예탁금 · 신용융자)")
+    st.caption(
+        "고객예탁금 = 증시 대기 자금, 신용융자 = 빚투 잔고 ｜ 단위 조원 ｜ "
+        "증감 %는 전일 대비 ｜ 출처: 네이버 금융"
+    )
+    dep = load_deposit(tick)
+    if dep.error:
+        st.info("증시 자금 데이터를 불러올 수 없습니다.")
+    else:
+        st.caption(f"기준일: {dep.date}")
+        dcols = st.columns(2)
+        dcols[0].metric(
+            "고객예탁금 (조원)",
+            f"{dep.deposit:,.2f}" if dep.deposit is not None else "—",
+            delta=(f"{dep.deposit_pct:+.2f}%"
+                   if dep.deposit_pct is not None else None),
+        )
+        dcols[1].metric(
+            "신용융자 잔고 (조원)",
+            f"{dep.credit:,.2f}" if dep.credit is not None else "—",
+            delta=(f"{dep.credit_pct:+.2f}%"
+                   if dep.credit_pct is not None else None),
+        )
 
     # --- 세계 주요 지수 --------------------------------------------------
     st.subheader("세계 주요 지수")
