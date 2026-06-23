@@ -86,6 +86,7 @@ interval = st.sidebar.select_slider(
 )
 show_chart = st.sidebar.toggle("이격도 추이 차트", value=True)
 show_trading = st.sidebar.toggle("거래량·거래대금 차트", value=True)
+show_deposit_chart = st.sidebar.toggle("증시 자금 추이 차트", value=True)
 show_world_chart = st.sidebar.toggle("세계지수 추이 차트", value=True)
 if st.sidebar.button("🔄 지금 새로고침", use_container_width=True):
     st.cache_data.clear()
@@ -247,6 +248,16 @@ def dashboard():
             delta=(f"{dep.credit_pct:+.2f}%"
                    if dep.credit_pct is not None else None),
         )
+        if show_deposit_chart and not dep.df.empty:
+            chcols = st.columns(2)
+            with chcols[0]:
+                st.caption("고객예탁금 추이 (조원)")
+                st.line_chart(dep.df["고객예탁금(조원)"], height=200,
+                              color="#5b8def")
+            with chcols[1]:
+                st.caption("신용융자 잔고 추이 (조원)")
+                st.line_chart(dep.df["신용잔고(조원)"], height=200,
+                              color="#e0823d")
 
     # --- 세계 주요 지수 --------------------------------------------------
     st.subheader("세계 주요 지수")
