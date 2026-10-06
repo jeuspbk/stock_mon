@@ -61,6 +61,8 @@ streamlit run app.py
 
 - `strategies.py` — 매매 기법 신호 계산·백테스트 (네이버 차트 API 일봉 OHLCV)
 - `pages/매매기법.py` — 매매 기법 페이지
+- `data/krx_stocks.csv` — 내장 KRX 종목 목록 (네이버 장애 시 야후 폴백의 한글 종목명·검색용)
+  — 신규 상장 반영: `python tools/update_stock_list.py`
 - `indicators.py` — 데이터 수집(yfinance) 및 이격도 계산
 - `app.py` — Streamlit 대시보드 UI
 - `requirements.txt` — 의존성

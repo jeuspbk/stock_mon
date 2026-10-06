@@ -11,16 +11,20 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
 
 import pandas as pd
 import yfinance as yf
 
 TRADING_DAYS = 252
+STOCK_LIST = Path(__file__).resolve().parent / "data" / "krx_stocks.csv"
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +58,29 @@ def _fetch_naver_ohlcv(symbol: str, count: int = 1000) -> tuple[str, pd.DataFram
     return name, df
 
 
+@lru_cache(maxsize=1)
+def _stock_list() -> list[tuple[str, str, str]]:
+    """내장 KRX 종목 목록 [(코드, 한글명, 시장)] — 네이버 장애 시 이름·검색용.
+
+    갱신: python tools/update_stock_list.py
+    """
+    try:
+        with STOCK_LIST.open(encoding="utf-8") as f:
+            return [(r["code"], r["name"], r["market"]) for r in csv.DictReader(f)]
+    except OSError:
+        return []
+
+
+def stock_name(symbol: str) -> str:
+    """종목코드·지수 → 한글명 (모르면 코드 그대로)."""
+    if symbol in ("KOSPI", "KOSDAQ"):
+        return {"KOSPI": "코스피", "KOSDAQ": "코스닥"}[symbol]
+    for code, name, _ in _stock_list():
+        if code == symbol:
+            return name
+    return symbol
+
+
 # 야후 지수 티커 (종목은 코드.KS → 코드.KQ 순으로 시도)
 YAHOO_INDEX = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11"}
 
@@ -64,8 +91,13 @@ def _fetch_yahoo_ohlcv(symbol: str, count: int) -> tuple[str, pd.DataFrame]:
     코스닥 종목도 '.KS' 티커에 오래된 시세가 남아 있는 경우가 있어,
     두 티커를 모두 받아 마지막 날짜가 가장 최신인 쪽을 사용한다.
     """
-    tickers = ([YAHOO_INDEX[symbol]] if symbol in YAHOO_INDEX
-               else [f"{symbol}.KS", f"{symbol}.KQ"])
+    market = next((m for c, _, m in _stock_list() if c == symbol), None)
+    if symbol in YAHOO_INDEX:
+        tickers = [YAHOO_INDEX[symbol]]
+    elif market:   # 내장 목록에서 시장을 알면 해당 티커만 조회
+        tickers = [f"{symbol}.{'KS' if market == '코스피' else 'KQ'}"]
+    else:
+        tickers = [f"{symbol}.KS", f"{symbol}.KQ"]
     start = pd.Timestamp.today() - pd.Timedelta(days=int(count * 1.5) + 10)
     best = pd.DataFrame()
     for t in tickers:
@@ -84,13 +116,13 @@ def _fetch_yahoo_ohlcv(symbol: str, count: int) -> tuple[str, pd.DataFrame]:
         df["Open"] = df["Open"].where(df["Open"] > 0, df["Close"])
         if best.empty or (df.index[-1], len(df)) > (best.index[-1], len(best)):
             best = df
-    return symbol, best.tail(count)
+    return stock_name(symbol), best.tail(count)
 
 
 def fetch_ohlcv(symbol: str, count: int = 1000) -> tuple[str, pd.DataFrame, str]:
     """일봉 OHLCV 수집 — 네이버 우선, 실패·빈 결과면 야후로 폴백.
 
-    반환: (종목명, DataFrame, 출처) — 야후 폴백 시 종목명은 코드로 대체된다.
+    반환: (종목명, DataFrame, 출처) — 야후 폴백 시 종목명은 내장 KRX 목록에서 찾는다.
     """
     try:
         name, df = _fetch_naver_ohlcv(symbol, count)
@@ -105,7 +137,26 @@ def fetch_ohlcv(symbol: str, count: int = 1000) -> tuple[str, pd.DataFrame, str]
 
 
 def search_stocks(query: str, limit: int = 10) -> list[tuple[str, str, str]]:
-    """네이버 자동완성으로 국내 종목 검색. 반환: [(코드, 이름, 시장)]"""
+    """국내 종목 검색 — 네이버 자동완성 우선, 실패 시 내장 KRX 목록. 반환: [(코드, 이름, 시장)]"""
+    try:
+        found = _search_naver(query, limit)
+        if found:
+            return found
+    except Exception:
+        pass
+    return _search_local(query, limit)
+
+
+def _search_local(query: str, limit: int) -> list[tuple[str, str, str]]:
+    """내장 목록에서 이름·코드 부분일치 검색 (정확 일치 → 앞부분 일치 → 포함 순)."""
+    q = query.strip().upper()
+    hits = [(c, n, m) for c, n, m in _stock_list() if q in n.upper() or q in c]
+    hits.sort(key=lambda r: (r[1].upper() != q and r[0] != q,
+                             not r[1].upper().startswith(q), len(r[1])))
+    return hits[:limit]
+
+
+def _search_naver(query: str, limit: int) -> list[tuple[str, str, str]]:
     url = ("https://ac.stock.naver.com/ac?target=stock&q="
            + urllib.parse.quote(query))
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
