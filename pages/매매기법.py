@@ -87,7 +87,7 @@ with st.expander("ⓘ 적합도 순위 기준"):
     )
 
 try:
-    name, results, price = load(symbol, years, fee, vb_k)
+    name, results, price, source = load(symbol, years, fee, vb_k)
 except Exception as e:
     st.error(f"데이터를 불러올 수 없습니다: {e}")
     st.stop()
@@ -98,7 +98,7 @@ st.subheader(f"{name} · 현재가 {last['Close']:,.2f}")
 st.caption(
     f"분석 기간 {price.index[0]:%Y.%m.%d} ~ {price.index[-1]:%Y.%m.%d} "
     f"({years}년) · 같은 기간 단순보유 {bh_total:+.1f}% · "
-    f"왕복 비용 {fee * 100:.2f}% 반영 · 출처: 네이버 금융"
+    f"왕복 비용 {fee * 100:.2f}% 반영 · 출처: {source}"
 )
 if symbol in ("KOSPI", "KOSDAQ"):
     st.info("지수를 선택하면 'KOSPI 대비 상대강도' 조건(미너비니·듀얼 모멘텀)은 "

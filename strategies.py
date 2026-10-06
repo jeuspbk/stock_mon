@@ -1,6 +1,7 @@
 """유명 투자자 매매 기법 - 신호 계산 및 일봉 백테스트 모듈.
 
 데이터 소스: 네이버 금융 차트 API (종목·지수 일봉 OHLCV, 무료)
+           — 실패 시 Yahoo Finance 로 폴백 (클라우드 서버에서 네이버 차단 대비)
 
 백테스트 공통 가정:
   - 신호는 당일 종가까지의 데이터로 판단하고, 손익은 다음 거래일부터 반영 (미래 참조 방지)
@@ -17,6 +18,7 @@ import urllib.request
 from dataclasses import dataclass, field
 
 import pandas as pd
+import yfinance as yf
 
 TRADING_DAYS = 252
 
@@ -25,7 +27,7 @@ TRADING_DAYS = 252
 # 데이터 수집
 # ---------------------------------------------------------------------------
 
-def fetch_ohlcv(symbol: str, count: int = 1000) -> tuple[str, pd.DataFrame]:
+def _fetch_naver_ohlcv(symbol: str, count: int = 1000) -> tuple[str, pd.DataFrame]:
     """네이버 차트 API에서 일봉 OHLCV 수집.
 
     symbol: 종목코드('005930') 또는 지수('KOSPI'/'KOSDAQ').
@@ -50,6 +52,56 @@ def fetch_ohlcv(symbol: str, count: int = 1000) -> tuple[str, pd.DataFrame]:
     # 거래정지 등으로 시가 0 이 들어오는 행 보정
     df["Open"] = df["Open"].where(df["Open"] > 0, df["Close"])
     return name, df
+
+
+# 야후 지수 티커 (종목은 코드.KS → 코드.KQ 순으로 시도)
+YAHOO_INDEX = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11"}
+
+
+def _fetch_yahoo_ohlcv(symbol: str, count: int) -> tuple[str, pd.DataFrame]:
+    """야후 파이낸스에서 일봉 OHLCV 수집 (네이버 실패 시 폴백).
+
+    코스닥 종목도 '.KS' 티커에 오래된 시세가 남아 있는 경우가 있어,
+    두 티커를 모두 받아 마지막 날짜가 가장 최신인 쪽을 사용한다.
+    """
+    tickers = ([YAHOO_INDEX[symbol]] if symbol in YAHOO_INDEX
+               else [f"{symbol}.KS", f"{symbol}.KQ"])
+    start = pd.Timestamp.today() - pd.Timedelta(days=int(count * 1.5) + 10)
+    best = pd.DataFrame()
+    for t in tickers:
+        try:
+            hist = yf.Ticker(t).history(start=start.strftime("%Y-%m-%d"),
+                                        interval="1d", auto_adjust=False)
+        except Exception:
+            continue
+        if hist is None or hist.empty:
+            continue
+        df = hist[["Open", "High", "Low", "Close", "Volume"]].astype(float)
+        idx = pd.DatetimeIndex(df.index)
+        df.index = (idx.tz_localize(None) if idx.tz is not None else idx).normalize()
+        df.index.name = "Date"
+        df = df[~df.index.duplicated(keep="last")].dropna(subset=["Close"])
+        df["Open"] = df["Open"].where(df["Open"] > 0, df["Close"])
+        if best.empty or (df.index[-1], len(df)) > (best.index[-1], len(best)):
+            best = df
+    return symbol, best.tail(count)
+
+
+def fetch_ohlcv(symbol: str, count: int = 1000) -> tuple[str, pd.DataFrame, str]:
+    """일봉 OHLCV 수집 — 네이버 우선, 실패·빈 결과면 야후로 폴백.
+
+    반환: (종목명, DataFrame, 출처) — 야후 폴백 시 종목명은 코드로 대체된다.
+    """
+    try:
+        name, df = _fetch_naver_ohlcv(symbol, count)
+        if not df.empty:
+            return name, df, "네이버 금융"
+    except Exception:
+        pass
+    name, df = _fetch_yahoo_ohlcv(symbol, count)
+    if df.empty:
+        raise ValueError(f"'{symbol}' 시세를 네이버·야후 모두에서 가져오지 못했습니다")
+    return name, df, "Yahoo Finance"
 
 
 def search_stocks(query: str, limit: int = 10) -> list[tuple[str, str, str]]:
@@ -527,13 +579,15 @@ MANUAL_STRATEGIES = [
 
 
 def run_all(symbol: str, years: int = 3, fee: float = 0.0025,
-            vb_k: float = 0.5) -> tuple[str, list[StrategyResult], pd.DataFrame]:
-    """선택 종목에 모든 기법을 적용. 반환: (종목명, 결과 목록, OHLCV)."""
+            vb_k: float = 0.5) -> tuple[str, list[StrategyResult], pd.DataFrame, str]:
+    """선택 종목에 모든 기법을 적용. 반환: (종목명, 결과 목록, OHLCV, 데이터 출처)."""
     count = years * TRADING_DAYS + 300          # 200·250일 지표 워밍업
-    name, df = fetch_ohlcv(symbol, count)
+    name, df, source = fetch_ohlcv(symbol, count)
     if len(df) < 300:
         raise ValueError(f"데이터 부족 ({len(df)}일) — 상장 1년 이상 종목만 분석 가능")
-    _, mkt_df = fetch_ohlcv("KOSPI", count + 50)
+    _, mkt_df, mkt_source = fetch_ohlcv("KOSPI", count + 50)
+    if mkt_source != source:
+        source = f"{source} (KOSPI: {mkt_source})"
     mkt = mkt_df["Close"].reindex(df.index).ffill()
     start = df.index[max(len(df) - years * TRADING_DAYS, 260)]
     results = []
@@ -544,4 +598,4 @@ def run_all(symbol: str, years: int = 3, fee: float = 0.0025,
         except Exception as e:  # 개별 기법 오류가 페이지 전체를 막지 않도록
             results.append(StrategyResult(key=s["key"], signal="오류",
                                           level="wait", error=str(e)))
-    return name, results, df.loc[start:]
+    return name, results, df.loc[start:], source
