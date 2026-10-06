@@ -79,6 +79,7 @@ def load_deposit(tick: int):
 # 사이드바 — 자동 갱신 설정
 # ---------------------------------------------------------------------------
 
+st.sidebar.page_link("pages/매매기법.py", label="📚 매매 기법")
 st.sidebar.header("⚙️ 설정")
 auto = st.sidebar.toggle("자동 갱신", value=False)
 interval = st.sidebar.select_slider(
@@ -113,6 +114,8 @@ def dashboard():
 
     now = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
     st.title("📈 주식 시황 모니터링")
+    st.page_link("pages/매매기법.py", label="매매 기법 — 유명 투자자 기법별 신호·백테스트",
+                 icon="📚")
     badge = "🟢 자동 갱신 중" if auto else "⏸ 수동"
     st.caption(
         f"기준 시각: {now} · {badge} · "

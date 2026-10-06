@@ -1,0 +1,3 @@
+[client]
+# 기본 사이드바 페이지 목록 숨김 (홈 ↔ 매매 기법은 page_link 로 이동)
+showSidebarNavigation = false
